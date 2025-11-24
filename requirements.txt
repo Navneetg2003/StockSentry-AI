@@ -1,0 +1,15 @@
+streamlit
+pandas
+python-dotenv
+matplotlib
+plotly
+seaborn
+yfinance
+numpy
+scikit-learn
+requests
+gspread
+oauth2client
+transformers
+torch
+xgboost
