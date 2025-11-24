@@ -1,16 +1,65 @@
 # 📈 StockSentry AI - Stock Price Prediction System
 
-An AI-powered stock price prediction system that combines machine learning, FinBERT sentiment analysis, and real-time news integration to predict next-day stock prices.
+[![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Streamlit](https://img.shields.io/badge/Streamlit-FF4B4B?logo=Streamlit&logoColor=white)](https://streamlit.io)
+[![GitHub](https://img.shields.io/badge/GitHub-StockSentry--AI-181717?logo=github)](https://github.com/Navneetg2003/StockSentry-AI)
 
-## 🌟 Features
+An AI-powered stock price prediction system that combines machine learning, FinBERT sentiment analysis, and real-time news integration to predict next-day stock prices with high accuracy.
 
-- **Smart Ticker Resolution**: Enter company names (e.g., "Apple", "Adani Power") or tickers (e.g., "AAPL", "RELIANCE.NS")
-- **Sentiment Analysis**: Uses FinBERT AI model to analyze financial news headlines
-- **Multi-Market Support**: US, Indian (NSE/BSE), UK, European, Japanese, and other global exchanges
-- **Dynamic Currency Display**: Automatically shows correct currency symbol based on stock exchange
-- **Real-time News Integration**: Fetches latest news via n8n workflow integration
-- **Interactive Dashboard**: Beautiful Streamlit UI with charts and visualizations
-- **Machine Learning**: Random Forest and XGBoost models with time-series cross-validation
+> ⚠️ **Disclaimer**: This tool is for educational and research purposes only. Not financial advice. Always do your own research before making investment decisions.
+
+## 📑 Table of Contents
+
+- [Key Features](#-key-features)
+- [Tech Stack](#️-tech-stack)
+- [Prerequisites](#-prerequisites)
+- [Quick Start](#-quick-start---step-by-step)
+- [Usage](#-usage)
+- [Supported Markets](#-supported-markets--currencies)
+- [How It Works](#-how-it-works)
+- [Configuration](#️-configuration)
+- [Project Structure](#️-project-structure)
+- [Troubleshooting](#-troubleshooting)
+- [Contributing](#-contributing)
+- [License](#-license)
+
+## 🎥 Demo
+
+### Sample Prediction Output
+```
+Company: Apple Inc. (AAPL)
+Current Price: $185.50
+Predicted Price (Next Day): $187.25
+Expected Change: +0.94% ↗️
+Sentiment Score: 0.68 (Positive)
+Confidence: High
+```
+
+### What You'll See
+- 📊 Real-time stock price charts
+- 📰 Latest news headlines with sentiment scores
+- 🤖 ML model predictions with confidence levels
+- 📈 Historical price trends and technical indicators
+- 💹 Multi-timeframe analysis
+
+## 🌟 Key Features
+
+### 🤖 AI & Machine Learning
+- **Dual ML Models**: Random Forest and XGBoost with time-series cross-validation
+- **FinBERT Sentiment Analysis**: Analyzes financial news using state-of-the-art NLP
+- **Feature Engineering**: 20+ technical indicators including MA, volatility, and momentum
+
+### 📊 Market Coverage
+- **Multi-Market Support**: US, Indian (NSE/BSE), UK, European, Japanese exchanges
+- **Smart Ticker Resolution**: Enter "Apple" or "AAPL" - both work!
+- **Dynamic Currency Display**: Auto-detects exchange and shows correct currency (₹, $, £, €, ¥)
+
+### 🎨 User Experience
+- **Interactive Dashboard**: Beautiful Streamlit UI with real-time charts
+- **Live News Integration**: Fetches latest headlines via n8n workflow
+- **Comprehensive Visualizations**: Plotly charts, price trends, sentiment graphs
+- **One-Click Predictions**: Simple interface for complex analysis
 
 ## 🛠️ Tech Stack
 
@@ -28,14 +77,14 @@ An AI-powered stock price prediction system that combines machine learning, FinB
 
 ## 🚀 Quick Start - Step by Step
 
-### Step 1: Download/Clone the Project
+### Step 1: Clone the Repository
 ```bash
-# If using Git
-git clone <your-repo-url>
-cd <project-folder>
+# Clone from GitHub
+git clone https://github.com/Navneetg2003/StockSentry-AI.git
+cd StockSentry-AI
 
-# OR download ZIP and extract to a folder like:
-cd "f:\New folder"
+# OR download ZIP and extract
+cd "f:\StockSentry-AI"
 ```
 
 ### Step 2: Create Virtual Environment
@@ -121,7 +170,7 @@ Every time you want to use the app:
 
 ```powershell
 # 1. Open PowerShell and navigate to project folder
-cd "f:\New folder"
+cd "f:\StockSentry-AI"
 
 # 2. Activate virtual environment
 .\venv\Scripts\Activate.ps1
@@ -253,33 +302,156 @@ Try these company names:
 
 ## 🔧 Troubleshooting
 
-### FinBERT Model Download
-First run downloads ~400MB FinBERT model. Ensure stable internet connection.
+### Common Issues
 
-### Webhook Timeouts
-If n8n webhook times out, the system continues with existing sheet data.
+#### FinBERT Model Download
+**Problem**: First run takes long time or fails  
+**Solution**: 
+- First run downloads ~400MB FinBERT model
+- Ensure stable internet connection
+- Model is cached locally after first download
+- Check `~/.cache/huggingface/` for downloaded models
 
-### Missing Data
-Some stocks may have limited historical data. Try using 3-6 month date ranges.
+#### Execution Policy Error (Windows)
+**Problem**: `.\venv\Scripts\Activate.ps1 cannot be loaded`  
+**Solution**:
+```powershell
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+```
 
-### Currency Not Showing
-Ensure ticker has correct exchange suffix (e.g., .NS for NSE, .L for London).
+#### Webhook Timeouts
+**Problem**: n8n webhook times out or fails  
+**Solution**: 
+- System continues with existing Google Sheet data
+- Check n8n workflow status
+- Verify webhook URL in settings
+- Use test_webhook.py to debug
 
-## 📝 Notes
+#### Missing Stock Data
+**Problem**: "No data available for this ticker"  
+**Solution**: 
+- Verify ticker symbol is correct
+- Add exchange suffix (.NS for NSE, .BO for BSE, etc.)
+- Some stocks have limited historical data
+- Try different date ranges (3-6 months recommended)
 
-- **Predictions are for educational purposes only** - Not financial advice
-- Model trains fresh on each run (no persistence)
-- Sentiment has 15% base impact on predictions
-- Uses last 6 months of data by default
-- News sentiment is computed fresh (no caching)
+#### Currency Not Showing Correctly
+**Problem**: Wrong currency symbol displayed  
+**Solution**: 
+- Ensure ticker has correct exchange suffix
+- Examples: RELIANCE.NS (₹), AAPL ($), BP.L (£)
+- Check supported markets table
+
+#### Import Errors
+**Problem**: `ModuleNotFoundError`  
+**Solution**:
+```powershell
+# Reinstall all dependencies
+pip install -r requirements.txt --force-reinstall
+
+# Or install specific package
+pip install streamlit yfinance transformers
+```
+
+#### Port Already in Use
+**Problem**: `Port 8501 is already in use`  
+**Solution**:
+```powershell
+# Use different port
+streamlit run app.py --server.port 8502
+
+# Or kill existing process
+netstat -ano | findstr :8501
+taskkill /PID <process_id> /F
+```
+
+## 📝 Important Notes
+
+- **Educational Purpose**: Predictions are for educational and research purposes only - **NOT financial advice**
+- **Fresh Training**: Model trains from scratch on each run (no model persistence)
+- **Sentiment Impact**: News sentiment has 15% base weight in final predictions
+- **Data Window**: Uses last 6 months of historical data by default
+- **Real-time Analysis**: Sentiment scores computed fresh on each run (no caching)
+- **Market Hours**: Predictions work 24/7, but market data updates only during trading hours
+- **Accuracy**: Past performance doesn't guarantee future results
+
+## 🚀 Future Enhancements
+
+- [ ] Model persistence and incremental training
+- [ ] Multiple timeframe predictions (1 day, 1 week, 1 month)
+- [ ] Portfolio analysis and optimization
+- [ ] Real-time price updates via WebSocket
+- [ ] Backtesting framework
+- [ ] Technical analysis indicators dashboard
+- [ ] Email/SMS alerts for price targets
+- [ ] API endpoint for programmatic access
+
+## ❓ Frequently Asked Questions (FAQ)
+
+### Q: Is this suitable for real trading decisions?
+**A**: No. This is an educational project. Never make investment decisions based solely on AI predictions. Always consult financial advisors and do thorough research.
+
+### Q: How accurate are the predictions?
+**A**: Accuracy varies by stock and market conditions. The model is trained on historical data and sentiment, but markets are unpredictable. Use predictions as one of many data points.
+
+### Q: Can I use this for cryptocurrencies?
+**A**: Yes! Use crypto tickers like `BTC-USD`, `ETH-USD`, etc. However, crypto markets are highly volatile.
+
+### Q: How often should I retrain the model?
+**A**: The model retrains automatically on each prediction using the latest 6 months of data.
+
+### Q: What if my company name isn't recognized?
+**A**: Use the exact ticker symbol with exchange suffix (e.g., `RELIANCE.NS` for Reliance on NSE).
+
+### Q: Can I run this on a server 24/7?
+**A**: Yes! Deploy on cloud platforms like AWS, Google Cloud, or Heroku. Update the Streamlit config for production use.
+
+### Q: Does it work without the n8n webhook?
+**A**: Yes. If the webhook fails, it falls back to Google Sheets data or continues without sentiment analysis.
+
+### Q: How much RAM do I need?
+**A**: Minimum 4GB RAM recommended. 8GB+ preferred for smooth operation with FinBERT model.
 
 ## 🤝 Contributing
 
-Contributions welcome! Please:
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Submit a pull request
+We welcome contributions! Here's how you can help:
+
+1. **Fork the repository**
+   ```bash
+   git clone https://github.com/Navneetg2003/StockSentry-AI.git
+   ```
+
+2. **Create a feature branch**
+   ```bash
+   git checkout -b feature/amazing-feature
+   ```
+
+3. **Make your changes**
+   - Add new features
+   - Fix bugs
+   - Improve documentation
+   - Optimize performance
+
+4. **Commit your changes**
+   ```bash
+   git commit -m "Add: amazing feature description"
+   ```
+
+5. **Push to your branch**
+   ```bash
+   git push origin feature/amazing-feature
+   ```
+
+6. **Open a Pull Request**
+   - Provide clear description of changes
+   - Include screenshots/examples if applicable
+   - Reference any related issues
+
+### Contribution Guidelines
+- Follow PEP 8 style guide for Python code
+- Add comments for complex logic
+- Update README.md if needed
+- Test thoroughly before submitting
 
 ## 📄 License
 
@@ -287,11 +459,28 @@ This project is open source and available under the MIT License.
 
 ## 🙏 Acknowledgments
 
-- FinBERT model by ProsusAI
-- Yahoo Finance for stock data
-- Streamlit for the amazing framework
-- HuggingFace for transformer models
+- **FinBERT Model**: [ProsusAI/finbert](https://huggingface.co/ProsusAI/finbert) for financial sentiment analysis
+- **Yahoo Finance**: Free stock market data API via [yfinance](https://github.com/ranaroussi/yfinance)
+- **Streamlit**: Amazing framework for building ML web apps
+- **HuggingFace**: Transformer models and NLP infrastructure
+- **n8n**: Workflow automation for news integration
+- **Open Source Community**: All the amazing libraries that make this possible
+
+## 📞 Contact & Support
+
+- **GitHub Issues**: [Report bugs or request features](https://github.com/Navneetg2003/StockSentry-AI/issues)
+- **Developer**: [Navneetg2003](https://github.com/Navneetg2003)
+
+## ⭐ Show Your Support
+
+If you find this project helpful, please consider:
+- ⭐ Starring the repository
+- 🐛 Reporting bugs
+- 💡 Suggesting new features
+- 🤝 Contributing to the code
 
 ---
 
-**Made with ❤️ for stock market enthusiasts and AI learners**
+**Made with ❤️ by stock market enthusiasts for AI learners**
+
+*Last Updated: November 2025*
