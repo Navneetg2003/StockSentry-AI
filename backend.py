@@ -3,8 +3,21 @@ import os
 import time
 import json
 import logging
+import warnings
 from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Tuple
+
+# Suppress verbose third-party logs BEFORE importing them
+os.environ["TRANSFORMERS_VERBOSITY"] = "error"
+os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("urllib3").setLevel(logging.WARNING)
+logging.getLogger("transformers").setLevel(logging.ERROR)
+logging.getLogger("huggingface_hub").setLevel(logging.ERROR)
+logging.getLogger("yfinance").setLevel(logging.DEBUG)
+logging.getLogger("peewee").setLevel(logging.WARNING)
+warnings.filterwarnings("ignore", message=".*UNEXPECTED.*")
+warnings.filterwarnings("ignore", category=FutureWarning)
 
 import pandas as pd
 import numpy as np
@@ -34,7 +47,7 @@ load_dotenv()
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 SHEET_NAME = os.getenv("GOOGLE_SHEET_NAME", "stocksentry")
 SERVICE_ACCOUNT_FILE = os.getenv("SERVICE_ACCOUNT_FILE", "stsn-478509-8fe20c776dfb.json")
-N8N_WEBHOOK_URL = os.getenv("N8N_WEBHOOK_URL", "https://navneetgupta.app.n8n.cloud/webhook/138bb9dd-f80c-4c3a-a941-f90b62870a37")
+N8N_WEBHOOK_URL = os.getenv("N8N_WEBHOOK_URL", "http://localhost:5678/webhook/138bb9dd-f80c-4c3a-a941-f90b62870a37")
 SENTIMENT_CACHE_FILE = os.getenv("SENTIMENT_CACHE_FILE", ".sentiment_cache.json")
 MODEL_STORE = os.getenv("MODEL_STORE", "stock_sentry_model.joblib")
 
@@ -92,6 +105,7 @@ class StockSentryML:
             self.model = None
             self.sentiment_pipeline = None
             self._sentiment_cache = safe_load_json(self.sentiment_cache_file) or {}
+            self._service_account_warned = False  # Track if warning was shown
 
             logger.info("Initializing StockSentryML (improved sentiment)")
 
@@ -218,7 +232,9 @@ class StockSentryML:
                 records = sheet.get_all_records()
                 df = pd.DataFrame(records)
             else:
-                logger.warning("Service account file not found. Using public CSV fallback.")
+                if not self._service_account_warned:
+                    logger.warning("Service account file not found. Using public CSV fallback.")
+                    self._service_account_warned = True
                 sheet_id = os.getenv("GOOGLE_SHEET_ID", "")
                 gid = os.getenv("GOOGLE_SHEET_GID", "0")
                 if not sheet_id:
@@ -259,7 +275,7 @@ class StockSentryML:
 
             df = df[['headline', 'snippet', 'takeaway', 'date_parsed']]
 
-            logger.info("Loaded %d headline rows from sheet", len(df))
+            logger.debug("Loaded %d headline rows from sheet", len(df))
             return df
         except Exception as e:
             logger.exception("Failed to load headlines from sheet: %s", e)
@@ -277,10 +293,10 @@ class StockSentryML:
 
         for attempt in range(1, max_attempts + 1):
             try:
-                logger.info("Triggering n8n webhook (attempt %d) for ticker '%s'", attempt, ticker_value)
+                logger.debug("Triggering n8n webhook (attempt %d) for ticker '%s'", attempt, ticker_value)
                 resp = requests.post(self.webhook_url, json=payload, headers=headers, timeout=30)
                 if resp.status_code in (200, 202):
-                    logger.info("Webhook accepted (status=%d). Waiting 10 seconds before polling...", resp.status_code)
+                    logger.info("Fetching news headlines...")
                     time.sleep(10)  # unchanged initial delay
                     return self.poll_for_headlines(timeout=120, interval=5)  # unchanged polling timing
                 else:
@@ -295,14 +311,14 @@ class StockSentryML:
     def poll_for_headlines(self, timeout: int = 120, interval: int = 5) -> bool:
         start_time = time.time()
         initial_count = self._row_count()
-        logger.info("Initial total row count: %d", initial_count)
+        logger.debug("Initial total row count: %d", initial_count)
         while time.time() - start_time < timeout:
             time.sleep(interval)
             self.headline_db = self.load_headlines_from_sheet()
             current_count = self._row_count()
-            logger.info("Polling... current_count=%d", current_count)
+            logger.debug("Polling... current_count=%d", current_count)
             if current_count != initial_count:
-                logger.info("Detected row count change: %d -> %d", initial_count, current_count)
+                logger.info("News headlines updated: %d -> %d rows", initial_count, current_count)
                 return True
         logger.warning("Polling timed out after %ds", timeout)
         return False
@@ -328,12 +344,21 @@ class StockSentryML:
         last_error = None
         while attempts < 3:
             try:
-                logger.info("yfinance download attempt %d for ticker=%s (start=%s end=%s)", attempts + 1, ticker, start_date, end_date)
+                logger.debug("yfinance download attempt %d for ticker=%s", attempts + 1, ticker)
                 df = yf.download(ticker, start=start_date, end=end_date, progress=False)
                 if df is None or df.empty:
                     raise ValueError("No data returned from yfinance")
+                
+                # Handle MultiIndex columns (newer yfinance versions return ('Close', 'TICKER'))
+                if isinstance(df.columns, pd.MultiIndex):
+                    df.columns = df.columns.get_level_values(0)
+                
                 df = df.reset_index()
-                df.rename(columns={df.columns[0]: 'date'}, inplace=True)
+                # First column is usually 'Date' or 'date'
+                date_col = df.columns[0]
+                if date_col != 'date':
+                    df.rename(columns={date_col: 'date'}, inplace=True)
+                
                 if 'Close' not in df.columns:
                     if 'Adj Close' in df.columns:
                         df['Close'] = df['Adj Close']
@@ -347,12 +372,12 @@ class StockSentryML:
                 # unify date format to string YYYY-MM-DD for downstream expected behavior
                 df['date'] = pd.to_datetime(df['date']).dt.strftime('%Y-%m-%d')
                 self.data = df
-                logger.info("Fetched %d rows for %s via download", len(df), ticker)
+                logger.info("Fetched %d days of price data for %s", len(df), ticker)
                 return df
             except Exception as e:
                 attempts += 1
                 last_error = e
-                logger.warning("yfinance download attempt %d failed: %s", attempts, e)
+                logger.debug("yfinance attempt %d failed: %s", attempts, e)
                 time.sleep(2)
 
         logger.error("Primary download failed for %s after %d attempts (last error: %s). Trying Ticker().history fallback.", ticker, attempts, last_error)
@@ -361,8 +386,15 @@ class StockSentryML:
             hist = tkr.history(start=start_date, end=end_date)
             if hist is None or hist.empty:
                 raise ValueError("Ticker().history returned empty frame")
+            
+            # Handle MultiIndex columns
+            if isinstance(hist.columns, pd.MultiIndex):
+                hist.columns = hist.columns.get_level_values(0)
+            
             hist = hist.reset_index()
-            hist.rename(columns={hist.columns[0]: 'date'}, inplace=True)
+            date_col = hist.columns[0]
+            if date_col != 'date':
+                hist.rename(columns={date_col: 'date'}, inplace=True)
             if 'Close' not in hist.columns:
                 if 'Adj Close' in hist.columns:
                     hist['Close'] = hist['Adj Close']
@@ -413,7 +445,7 @@ class StockSentryML:
             features = dff[['close', 'return_1d', 'ma_3', 'ma_7', 'vol_7', 'day_of_week']].fillna(0).values
             targets = dff['target_next_close'].values.astype(float)
 
-            logger.info(f"Built {len(features)} feature samples")
+            logger.debug(f"Built {len(features)} feature samples")
             return features, targets, dff
         except Exception as e:
             logger.error(f"Error in build_features: {e}")
@@ -454,7 +486,7 @@ class StockSentryML:
                     preds = m.predict(X_val_cv)
                     scores.append(r2_score(y_val_cv, preds))
                 mean_score = np.mean(scores)
-                logger.info("Model %s CV mean R2: %.4f", name, mean_score)
+                logger.debug("Model %s CV R2: %.4f", name, mean_score)
                 if mean_score > best_r2:
                     best_r2 = mean_score
                     best_model = m
@@ -539,7 +571,7 @@ class StockSentryML:
             # Normalize extreme sentiment using tanh (compresses extremes but preserves sign)
             normalized = float(math.tanh(weighted_avg * 1.5))  # 1.5 factor to keep sensitivity
 
-            logger.info("Sentiment: count=%d mean=%.4f weighted=%.4f normalized=%.4f", count, simple_mean, weighted_avg, normalized)
+            logger.debug("Sentiment: count=%d mean=%.4f weighted=%.4f normalized=%.4f", count, simple_mean, weighted_avg, normalized)
             return normalized
         except Exception as e:
             logger.exception("Sentiment aggregation failed: %s", e)
@@ -562,27 +594,39 @@ class StockSentryML:
                 'adani green': 'ADANIGREEN.NS',
                 'adani transmission': 'ADANITRANS.NS',
                 'reliance industries': 'RELIANCE.NS',
+                'reliance': 'RELIANCE.NS',
                 'tata motors': 'TATAMOTORS.NS',
                 'hdfc bank': 'HDFCBANK.NS',
+                'shadowfax': 'SHADOWFAX.NS',
+                'zomato': 'ZOMATO.NS',
+                'paytm': 'PAYTM.NS',
+                'nykaa': 'NYKAA.NS',
+                'swiggy': 'SWIGGY.NS',
+                'tcs': 'TCS.NS',
+                'infosys': 'INFY.NS',
+                'wipro': 'WIPRO.NS',
                 'apple': 'AAPL',
                 'microsoft': 'MSFT',
                 'google': 'GOOGL',
                 'amazon': 'AMZN',
-                'tesla': 'TSLA'
+                'tesla': 'TSLA',
+                'nvidia': 'NVDA',
+                'meta': 'META',
+                'netflix': 'NFLX'
             }
 
             if q_norm in alias_map:
                 ticker = alias_map[q_norm]
-                logger.info("Alias map resolved '%s' -> %s", q_raw, ticker)
+                logger.debug("Alias resolved '%s' -> %s", q_raw, ticker)
                 return ticker
 
             if q_raw.upper() == q_raw and len(q_raw) <= 12 and (' ' not in q_raw):
-                logger.info("Input looks like ticker; using as-is: %s", q_raw.upper())
+                logger.debug("Using ticker as-is: %s", q_raw.upper())
                 return q_raw.upper()
 
             try:
                 url = f"https://query2.finance.yahoo.com/v1/finance/search?q={urllib.parse.quote(q_raw)}"
-                logger.info("Resolving ticker for query '%s' via Yahoo search", q_raw)
+                logger.debug("Resolving ticker for query '%s' via Yahoo search", q_raw)
                 resp = requests.get(url, timeout=8)
                 resp.raise_for_status()
                 data = resp.json()
@@ -641,7 +685,7 @@ class StockSentryML:
 
             final = float(ml_pred * (1.0 + adj))
 
-            logger.info("ML_pred=%.4f sentiment=%.4f comp=%.4f alpha=%.4f preliminary=%.4f capped_adj=%.4f final=%.4f",
+            logger.debug("ML_pred=%.4f sentiment=%.4f comp=%.4f alpha=%.4f preliminary=%.4f capped_adj=%.4f final=%.4f",
                         ml_pred, sentiment, sent_comp, alpha, preliminary_adj, adj, final)
             return final
         except Exception as e:
@@ -674,7 +718,7 @@ class StockSentryML:
                 logger.error(f"Invalid date format: {e}")
                 raise ValueError(f"Dates must be in YYYY-MM-DD format: {e}")
 
-            logger.info("Starting full workflow for input '%s' (%s to %s)", company_or_ticker, start_date, end_date)
+            logger.info("Analyzing %s...", company_or_ticker)
 
             # Step 1: Resolve ticker
             resolved = self.resolve_ticker(company_or_ticker)
@@ -708,12 +752,26 @@ class StockSentryML:
             latest_row = df_features.iloc[-1:]
             baseline_features = latest_row[['close', 'return_1d', 'ma_3', 'ma_7', 'vol_7', 'day_of_week']].values
             ml_pred = float(model.predict(baseline_features)[0])
-            logger.info("Baseline ML predicted next close: %.4f", ml_pred)
+            logger.debug("Baseline ML prediction: %.4f", ml_pred)
 
             # Step 7: Compute sentiment
             try:
                 self.headline_db = self.load_headlines_from_sheet()
+                
+                # Display fetched news headlines
+                if self.headline_db is not None and not self.headline_db.empty:
+                    headline_count = len(self.headline_db)
+                    logger.info("📰 Fetched %d news headlines:", headline_count)
+                    for idx, row in self.headline_db.head(5).iterrows():  # Show up to 5 headlines
+                        headline = str(row.get('headline', '')).strip()[:80]  # Truncate long headlines
+                        if headline:
+                            logger.info("   • %s", headline + ("..." if len(str(row.get('headline', ''))) > 80 else ""))
+                    if headline_count > 5:
+                        logger.info("   ... and %d more", headline_count - 5)
+                
                 sentiment = self.get_overall_sentiment()
+                sentiment_label = "positive 📈" if sentiment > 0.1 else "negative 📉" if sentiment < -0.1 else "neutral ➡️"
+                logger.info("📊 Sentiment analysis: %.2f (%s)", sentiment, sentiment_label)
             except Exception as e:
                 logger.warning(f"Sentiment computation failed, using neutral: {e}")
                 sentiment = 0.0
@@ -727,7 +785,7 @@ class StockSentryML:
                     logger.warning(f"Predicted price is non-positive ({final_price}), returning ML baseline")
                     final_price = ml_pred
 
-                logger.info("Final predicted price for '%s' (ticker=%s): %.4f", company_or_ticker, resolved, final_price)
+                logger.info("✓ Prediction complete: %s -> %.2f", resolved, final_price)
                 return final_price
             except Exception as e:
                 logger.error(f"Final prediction computation failed: {e}")

@@ -83,6 +83,51 @@ def get_currency_symbol(ticker: str) -> str:
     else:
         return '$'  # US Dollar
 
+# --- HELPER FUNCTION: Normalize Company Input ---
+def normalize_company_input(user_input: str) -> str:
+    """Pre-process user input to handle common company names typed in any case"""
+    if not user_input:
+        return user_input
+    
+    normalized = user_input.strip().lower()
+    
+    # Quick alias map for common lookups (handles case-insensitive input)
+    quick_aliases = {
+        'nvidia': 'NVDA',
+        'apple': 'AAPL',
+        'microsoft': 'MSFT',
+        'google': 'GOOGL',
+        'amazon': 'AMZN',
+        'tesla': 'TSLA',
+        'meta': 'META',
+        'netflix': 'NFLX',
+        'adani power': 'ADANIPOWER.NS',
+        'adani powers': 'ADANIPOWER.NS',
+        'adani enterprises': 'ADANIENT.NS',
+        'adani ports': 'ADANIPORTS.NS',
+        'adani total gas': 'ATGL.NS',
+        'adani green': 'ADANIGREEN.NS',
+        'adani transmission': 'ADANITRANS.NS',
+        'reliance': 'RELIANCE.NS',
+        'reliance industries': 'RELIANCE.NS',
+        'tata motors': 'TATAMOTORS.NS',
+        'hdfc bank': 'HDFCBANK.NS',
+        'shadowfax': 'SHADOWFAX.NS',
+        'zomato': 'ZOMATO.NS',
+        'paytm': 'PAYTM.NS',
+        'nykaa': 'NYKAA.NS',
+        'swiggy': 'SWIGGY.NS',
+        'tcs': 'TCS.NS',
+        'infosys': 'INFY.NS',
+        'wipro': 'WIPRO.NS',
+    }
+    
+    if normalized in quick_aliases:
+        return quick_aliases[normalized]
+    
+    # Return original input if no alias found (backend will handle further resolution)
+    return user_input.strip()
+
 # --- SIDEBAR: INPUTS ---
 with st.sidebar:
     st.title("🤖 StockSentry AI")
@@ -103,7 +148,7 @@ with st.sidebar:
     load_dotenv()
     default_sheet = os.getenv("GOOGLE_SHEET_NAME", "stocksentry")
     # Updated to the user's production webhook URL
-    default_webhook = os.getenv("N8N_WEBHOOK_URL", "https://navneetgupta.app.n8n.cloud/webhook/138bb9dd-f80c-4c3a-a941-f90b62870a37")
+    default_webhook = os.getenv("N8N_WEBHOOK_URL", "http://localhost:5678/webhook/138bb9dd-f80c-4c3a-a941-f90b62870a37")
     
     with st.expander("⚙️ Advanced Settings"):
         sheet_name = st.text_input("Google Sheet Name", value=default_sheet)
@@ -117,6 +162,9 @@ if run_btn:
     if not company_input or not sheet_name:
         st.error("Please fill in all required fields (Company/Ticker, Sheet Name).")
     else:
+        # Normalize input to handle common company names (e.g., "NVIDIA" -> "NVDA")
+        normalized_input = normalize_company_input(company_input)
+        
         try:
             # 1. Initialize the Backend
             with st.spinner(f"Initializing AI & Loading FinBERT model..."):
@@ -127,20 +175,20 @@ if run_btn:
                 )
 
             # 2. Run Full Workflow (resolves ticker, fetches news, trains, predicts)
-            with st.spinner(f"Analyzing {company_input} (last 6 months data): resolving ticker, fetching news, training models..."):
+            with st.spinner(f"Analyzing {normalized_input} (last 6 months data): resolving ticker, fetching news, training models..."):
                 # Auto-calculated dates: 6 months to today
                 s_date_str = start_date.strftime('%Y-%m-%d')
                 e_date_str = end_date.strftime('%Y-%m-%d')
                 
                 predicted_price = stock_sentry.run_full_workflow(
-                    company_or_ticker=company_input,
+                    company_or_ticker=normalized_input,
                     start_date=s_date_str,
                     end_date=e_date_str
                 )
 
             if predicted_price is not None:
                 # Get resolved ticker for display
-                resolved_ticker = stock_sentry.resolve_ticker(company_input)
+                resolved_ticker = stock_sentry.resolve_ticker(normalized_input)
                 
                 # Get currency symbol based on ticker
                 currency = get_currency_symbol(resolved_ticker)
@@ -219,7 +267,7 @@ if run_btn:
                             )
                         
                         fig.update_layout(height=500, hovermode="x unified", title_text="Price Timeline")
-                        st.plotly_chart(fig, use_container_width=True)
+                        st.plotly_chart(fig, width="stretch")
                     else:
                         st.warning("No sentiment data available to plot.")
 
@@ -239,7 +287,7 @@ if run_btn:
                             mode='lines'
                         ))
                         fig_perf.update_layout(title="Historical Price Performance", height=500)
-                        st.plotly_chart(fig_perf, use_container_width=True)
+                        st.plotly_chart(fig_perf, width="stretch")
                     else:
                         st.info("Model performance metrics unavailable.")
 
