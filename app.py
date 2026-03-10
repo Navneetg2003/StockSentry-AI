@@ -83,50 +83,14 @@ def get_currency_symbol(ticker: str) -> str:
     else:
         return '$'  # US Dollar
 
-# --- HELPER FUNCTION: Normalize Company Input ---
-def normalize_company_input(user_input: str) -> str:
-    """Pre-process user input to handle common company names typed in any case"""
-    if not user_input:
-        return user_input
-    
-    normalized = user_input.strip().lower()
-    
-    # Quick alias map for common lookups (handles case-insensitive input)
-    quick_aliases = {
-        'nvidia': 'NVDA',
-        'apple': 'AAPL',
-        'microsoft': 'MSFT',
-        'google': 'GOOGL',
-        'amazon': 'AMZN',
-        'tesla': 'TSLA',
-        'meta': 'META',
-        'netflix': 'NFLX',
-        'adani power': 'ADANIPOWER.NS',
-        'adani powers': 'ADANIPOWER.NS',
-        'adani enterprises': 'ADANIENT.NS',
-        'adani ports': 'ADANIPORTS.NS',
-        'adani total gas': 'ATGL.NS',
-        'adani green': 'ADANIGREEN.NS',
-        'adani transmission': 'ADANITRANS.NS',
-        'reliance': 'RELIANCE.NS',
-        'reliance industries': 'RELIANCE.NS',
-        'tata motors': 'TATAMOTORS.NS',
-        'hdfc bank': 'HDFCBANK.NS',
-        'shadowfax': 'SHADOWFAX.NS',
-        'zomato': 'ZOMATO.NS',
-        'paytm': 'PAYTM.NS',
-        'nykaa': 'NYKAA.NS',
-        'swiggy': 'SWIGGY.NS',
-        'tcs': 'TCS.NS',
-        'infosys': 'INFY.NS',
-        'wipro': 'WIPRO.NS',
-    }
-    
-    if normalized in quick_aliases:
-        return quick_aliases[normalized]
-    
-    # Return original input if no alias found (backend will handle further resolution)
-    return user_input.strip()
+# --- FinBERT: Load once per server session, reused across all runs ---
+@st.cache_resource(show_spinner="Loading FinBERT model (first time only)...")
+def load_finbert_pipeline():
+    from transformers import pipeline, AutoTokenizer, AutoModelForSequenceClassification
+    model_name = os.getenv("FINBERT_MODEL", "ProsusAI/finbert")
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    model = AutoModelForSequenceClassification.from_pretrained(model_name)
+    return pipeline("text-classification", model=model, tokenizer=tokenizer, device=-1)
 
 # --- SIDEBAR: INPUTS ---
 with st.sidebar:
@@ -162,16 +126,18 @@ if run_btn:
     if not company_input or not sheet_name:
         st.error("Please fill in all required fields (Company/Ticker, Sheet Name).")
     else:
-        # Normalize input to handle common company names (e.g., "NVIDIA" -> "NVDA")
-        normalized_input = normalize_company_input(company_input)
+        # Pass raw input; backend's resolve_ticker() is the single source of truth
+        normalized_input = company_input.strip()
         
         try:
-            # 1. Initialize the Backend
-            with st.spinner(f"Initializing AI & Loading FinBERT model..."):
+            # 1. Initialize the Backend (FinBERT loaded once via st.cache_resource)
+            finbert_pipeline = load_finbert_pipeline()
+            with st.spinner(f"Initializing StockSentry AI..."):
                 stock_sentry = StockSentryML(
                     google_sheet_name=sheet_name,
                     service_account_file=service_account_path,
-                    webhook_url=webhook_url
+                    webhook_url=webhook_url,
+                    preloaded_pipeline=finbert_pipeline
                 )
 
             # 2. Run Full Workflow (resolves ticker, fetches news, trains, predicts)
@@ -238,7 +204,7 @@ if run_btn:
                 st.markdown("---")
 
                 # --- TABS FOR VISUALIZATIONS ---
-                tab1, tab2, tab3 = st.tabs(["📈 Interactive Dashboard", "📉 Performance", "📰 Raw Data"])
+                tab1, tab2, tab3, tab4 = st.tabs(["📈 Interactive Dashboard", "📉 Performance", "📰 Raw Data", "📰 News & Sentiment"])
 
                 with tab1:
                     st.subheader(f"{resolved_ticker}: Price vs. Sentiment Analysis")
@@ -297,6 +263,23 @@ if run_btn:
                         st.dataframe(stock_sentry.data.tail(100))  # Show last 100 rows
                     else:
                         st.warning("No data available")
+
+                with tab4:
+                    st.subheader("News Headlines & Sentiment")
+                    news_df = stock_sentry.get_headlines_with_sentiment()
+                    if news_df is not None and not news_df.empty:
+                        st.caption(f"{len(news_df)} headlines fetched from Google Sheet")
+                        # Colour-code the sentiment_score column
+                        def _colour_score(val):
+                            if val > 0.1:
+                                return 'color: #28a745; font-weight: bold'
+                            elif val < -0.1:
+                                return 'color: #dc3545; font-weight: bold'
+                            return 'color: #888'
+                        styled = news_df.style.applymap(_colour_score, subset=['sentiment_score'])
+                        st.dataframe(styled, use_container_width=True)
+                    else:
+                        st.info("No headlines available. Check that the Google Sheet is populated and the n8n webhook ran successfully.")
 
             else:
                 st.error("""Prediction failed. Please check the logs and ensure:

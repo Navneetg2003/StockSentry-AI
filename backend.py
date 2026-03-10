@@ -86,7 +86,8 @@ class StockSentryML:
                  service_account_file: str = SERVICE_ACCOUNT_FILE,
                  webhook_url: str = N8N_WEBHOOK_URL,
                  sentiment_cache_file: str = SENTIMENT_CACHE_FILE,
-                 model_store: str = MODEL_STORE):
+                 model_store: str = MODEL_STORE,
+                 preloaded_pipeline=None):
 
         try:
             if not google_sheet_name or not isinstance(google_sheet_name, str):
@@ -109,12 +110,16 @@ class StockSentryML:
 
             logger.info("Initializing StockSentryML (improved sentiment)")
 
-            # Load FinBERT once if possible; fall back gracefully
-            try:
-                self._load_finbert()
-            except Exception as e:
-                logger.error(f"FinBERT initialization failed: {e}")
-                self.sentiment_pipeline = None
+            # Load FinBERT: use pre-loaded pipeline if provided (e.g. from st.cache_resource)
+            if preloaded_pipeline is not None:
+                self.sentiment_pipeline = preloaded_pipeline
+                logger.info("Using pre-loaded FinBERT pipeline.")
+            else:
+                try:
+                    self._load_finbert()
+                except Exception as e:
+                    logger.error(f"FinBERT initialization failed: {e}")
+                    self.sentiment_pipeline = None
 
             # Try load headlines once
             try:
@@ -577,6 +582,30 @@ class StockSentryML:
             logger.exception("Sentiment aggregation failed: %s", e)
             return 0.0
 
+    def get_headlines_with_sentiment(self) -> pd.DataFrame:
+        """Returns headline_db with per-row sentiment scores and labels."""
+        if self.headline_db is None or self.headline_db.empty:
+            return pd.DataFrame()
+        try:
+            df = self.headline_db.copy()
+            texts = []
+            for _, row in df.iterrows():
+                headline = str(row.get('headline', '')).strip()
+                snippet = str(row.get('snippet', '')).strip()
+                takeaway = str(row.get('takeaway', '')).strip() if 'takeaway' in row else ''
+                unified = " ".join([x for x in [headline, snippet, takeaway] if x])
+                texts.append(unified)
+            scores = self._predict_sentiment_for_texts(texts)
+            df['sentiment_score'] = [round(s, 4) for s in scores]
+            df['sentiment_label'] = df['sentiment_score'].apply(
+                lambda s: '📈 Positive' if s > 0.1 else ('📉 Negative' if s < -0.1 else '➡️ Neutral')
+            )
+            out_cols = [c for c in ['headline', 'snippet', 'sentiment_score', 'sentiment_label'] if c in df.columns]
+            return df[out_cols].reset_index(drop=True)
+        except Exception as e:
+            logger.exception("get_headlines_with_sentiment failed: %s", e)
+            return pd.DataFrame()
+
     # ---------- Company name -> ticker resolution ----------
     def resolve_ticker(self, query: str) -> str:
         try:
@@ -744,9 +773,26 @@ class StockSentryML:
                 logger.warning(f"Only {len(X)} samples available, model may be unreliable")
 
             # Step 5: Train
-            model = self.train_baseline_model(X, y)
+            # Use a per-ticker cache file so models don't overwrite each other
+            model_cache_path = self.model_store.replace('.joblib', f'_{resolved}.joblib')
+            model = None
+            if os.path.exists(model_cache_path):
+                try:
+                    model = joblib.load(model_cache_path)
+                    self.model = model
+                    logger.info("Loaded cached model for %s from %s", resolved, model_cache_path)
+                except Exception as e:
+                    logger.warning("Could not load cached model (%s); retraining: %s", model_cache_path, e)
+                    model = None
             if model is None:
-                raise ValueError("Model training returned None")
+                model = self.train_baseline_model(X, y)
+                if model is None:
+                    raise ValueError("Model training returned None")
+                try:
+                    joblib.dump(model, model_cache_path)
+                    logger.info("Saved trained model to %s", model_cache_path)
+                except Exception as e:
+                    logger.warning("Could not save model to %s: %s", model_cache_path, e)
 
             # Step 6: Predict baseline next close
             latest_row = df_features.iloc[-1:]
