@@ -47,7 +47,7 @@ load_dotenv()
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 SHEET_NAME = os.getenv("GOOGLE_SHEET_NAME", "stocksentry")
 SERVICE_ACCOUNT_FILE = os.getenv("SERVICE_ACCOUNT_FILE", "stsn-478509-8fe20c776dfb.json")
-N8N_WEBHOOK_URL = os.getenv("N8N_WEBHOOK_URL", "http://localhost:5678/webhook/138bb9dd-f80c-4c3a-a941-f90b62870a37")
+N8N_WEBHOOK_URL = os.getenv("N8N_WEBHOOK_URL", "http://localhost:5678/webhook-test/138bb9dd-f80c-4c3a-a941-f90b62870a37")
 SENTIMENT_CACHE_FILE = os.getenv("SENTIMENT_CACHE_FILE", ".sentiment_cache.json")
 MODEL_STORE = os.getenv("MODEL_STORE", "stock_sentry_model.joblib")
 
@@ -152,16 +152,19 @@ class StockSentryML:
         Returns a list of floats in [-1, 1].
         """
         results = []
-        for txt in texts:
+        for idx, txt in enumerate(texts):
             key = txt.strip()
             if not key:
+                logger.debug(f"Empty text at index {idx}, assigning score 0.0")
                 results.append(0.0)
                 continue
 
             # Use cache first
             if key in self._sentiment_cache:
                 try:
-                    results.append(float(self._sentiment_cache[key]))
+                    cached_score = float(self._sentiment_cache[key])
+                    logger.debug(f"Using cached sentiment for text[{idx}] (len={len(key)}): {cached_score:.4f}")
+                    results.append(cached_score)
                     continue
                 except Exception:
                     # fallback to recompute if cache corrupted
@@ -171,7 +174,7 @@ class StockSentryML:
             if self.sentiment_pipeline is None:
                 # fall back to heuristic
                 score = self._simple_heuristic_sentiment(key)
-                logger.debug("Heuristic sentiment for text (len=%d): %.4f", len(key), score)
+                logger.debug(f"Using heuristic for text[{idx}] (len={len(key)}): {score:.4f}")
             else:
                 try:
                     pipe_result = self.sentiment_pipeline([key], truncation=True, max_length=512)
@@ -184,8 +187,9 @@ class StockSentryML:
                         score = -min(1.0, score_prob)
                     else:
                         score = 0.0
+                    logger.debug(f"FinBERT result for text[{idx}]: label={label}, score_prob={score_prob:.4f}, final_score={score:.4f}")
                 except Exception as e:
-                    logger.warning("FinBERT run failed for a text; falling back to heuristic: %s", e)
+                    logger.warning(f"FinBERT run failed for text[{idx}]; falling back to heuristic: {e}")
                     score = self._simple_heuristic_sentiment(key)
 
             # Normalize and clamp
@@ -206,16 +210,37 @@ class StockSentryML:
         return results
 
     def _simple_heuristic_sentiment(self, text: str) -> float:
-        positive_words = ['gain', 'rise', 'up', 'beat', 'record', 'strong', 'positive', 'outperform', 'surge']
-        negative_words = ['drop', 'fall', 'down', 'loss', 'weak', 'negative', 'miss', 'decline', 'slump']
+        # Expanded sentiment keywords with word variations
+        positive_words = [
+            'gain', 'gained', 'gaining', 'rise', 'rising', 'rose', 'up', 'beat', 'beats', 'record', 
+            'strong', 'positive', 'outperform', 'surge', 'surging', 'bull', 'bullish', 'growth',
+            'improve', 'improved', 'improving', 'boost', 'boosted', 'profit', 'profitable', 'profit-making',
+            'recovery', 'recover', 'recovered', 'rally', 'rallying', 'win', 'winning', 'outperforming',
+            'accelerat', 'upside', 'strength', 'optimis', 'high',
+        ]
+        negative_words = [
+            'drop', 'dropped', 'dropping', 'fall', 'falling', 'fell', 'down', 'loss', 'losses', 
+            'weak', 'negative', 'miss', 'missed', 'decline', 'declined', 'declining', 'slump',
+            'bear', 'bearish', 'downturn', 'downside', 'crash', 'crashed', 'plunge', 'plunging',
+            'reduce', 'reduced', 'reduction', 'cut', 'cutting', 'loss-making', 'risk', 'risks',
+            'concern', 'concerns', 'warning', 'challenge', 'challenges', 'pessimis', 'low',
+        ]
         txt = text.lower()
         score = 0
+        matched_pos = []
+        matched_neg = []
+        
         for w in positive_words:
             if w in txt:
                 score += 1
+                matched_pos.append(w)
         for w in negative_words:
             if w in txt:
                 score -= 1
+                matched_neg.append(w)
+        
+        logger.debug(f"Heuristic sentiment analysis - text_len={len(text)}, positive_matches={matched_pos}, negative_matches={matched_neg}, score={score}")
+        
         if score == 0:
             return 0.0
         # scale to [-1,1] but don't exaggerate
@@ -534,12 +559,12 @@ class StockSentryML:
         and returns a scaled weighted average in [-1, 1].
         """
         if self.headline_db is None or self.headline_db.empty:
-            logger.info("Headline DB empty; no sentiment")
+            logger.warning("⚠️ Headline DB is empty or None; returning neutral sentiment (0.0)")
             return 0.0
         try:
             df = self.headline_db.copy()
             if 'headline' not in df.columns:
-                logger.warning("Headline column missing in sheet")
+                logger.warning("⚠️ Headline column missing in sheet; returning neutral sentiment (0.0)")
                 return 0.0
 
             # Prepare texts and recency weights
@@ -557,7 +582,9 @@ class StockSentryML:
                 w = self._row_recency_weight(row_date)
                 weights.append(w)
 
+            logger.info(f"📊 Processing {len(texts)} headlines for sentiment analysis")
             if len(texts) == 0:
+                logger.warning("⚠️ No valid text entries found; returning neutral sentiment (0.0)")
                 return 0.0
 
             raw_scores = self._predict_sentiment_for_texts(texts)
@@ -572,14 +599,20 @@ class StockSentryML:
             weighted_avg = float(np.sum(scores * wts) / np.sum(wts))
             simple_mean = float(np.mean(scores))
             count = int(len(scores))
+            
+            # Count positive and negative sentiments
+            positive_count = int(np.sum(scores > 0.1))
+            negative_count = int(np.sum(scores < -0.1))
+            neutral_count = count - positive_count - negative_count
 
             # Normalize extreme sentiment using tanh (compresses extremes but preserves sign)
             normalized = float(math.tanh(weighted_avg * 1.5))  # 1.5 factor to keep sensitivity
 
-            logger.debug("Sentiment: count=%d mean=%.4f weighted=%.4f normalized=%.4f", count, simple_mean, weighted_avg, normalized)
+            logger.info(f"✓ Sentiment analysis complete: {positive_count} positive, {negative_count} negative, {neutral_count} neutral")
+            logger.info(f"✓ Sentiment stats: count={count} mean={simple_mean:.4f} weighted={weighted_avg:.4f} normalized={normalized:.4f}")
             return normalized
         except Exception as e:
-            logger.exception("Sentiment aggregation failed: %s", e)
+            logger.exception(f"❌ Sentiment aggregation failed: {e}")
             return 0.0
 
     def get_headlines_with_sentiment(self) -> pd.DataFrame:
